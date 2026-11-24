@@ -1,4 +1,4 @@
-# bf-rs
+# rbf（bf-rs）
 
 一个用 Rust 写的 Brainfuck 解释器，小巧、直接、可读。
 
