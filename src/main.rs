@@ -3,6 +3,7 @@ use std::process::exit;
 
 const NAME: &str = env!("CARGO_PKG_NAME");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const SHIFT: usize = 1024; // 左扩展时一次补多少格
 
 fn print_help() {
     println!(
@@ -103,8 +104,9 @@ fn main() {
     }
 
     let src = match file {
-        Some(path) => std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("读取 {path} 失败: {e}")),
+        Some(path) => {
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取 {path} 失败: {e}"))
+        }
         None => {
             // 没给文件、没写 '-'，且标准输入是终端：直接显示帮助并正常退出
             if !use_stdin && io::stdin().is_terminal() {
@@ -123,10 +125,7 @@ fn main() {
 }
 
 fn run(src: &str) {
-    let code: Vec<u8> = src
-        .bytes()
-        .filter(|b| b"><+-.,[]".contains(b))
-        .collect();
+    let code: Vec<u8> = src.bytes().filter(|b| b"><+-.,[]".contains(b)).collect();
 
     let mut jump = vec![0usize; code.len()];
     let mut stack = Vec::new();
@@ -147,8 +146,10 @@ fn run(src: &str) {
         panic!("第 {i} 个指令处有不匹配的 '['");
     }
 
-    let mut tape = vec![0u8; 30_000];
-    let mut ptr = 0usize;
+    const INITIAL: usize = 30_000;
+    let mut tape: Vec<u8> = vec![0u8; INITIAL];
+    let mut offset: isize = (INITIAL / 2) as isize; // 逻辑 0 放中间，左右各留一半
+    let mut ptr: isize = 0; // 逻辑指针，可为负
     let mut pc = 0usize;
     let mut stdout = io::stdout();
     let mut stdin = io::stdin().bytes();
@@ -157,33 +158,47 @@ fn run(src: &str) {
         match code[pc] {
             b'>' => {
                 ptr += 1;
-                if ptr >= tape.len() {
+                if offset + ptr >= tape.len() as isize {
                     tape.push(0);
                 }
             }
             b'<' => {
-                assert!(ptr > 0, "指针向左越界");
                 ptr -= 1;
+                if offset + ptr < 0 {
+                    // 向左扩展：前面插 SHIFT 个 0，逻辑 0 的物理位置后移 SHIFT
+                    let mut new_tape = vec![0u8; SHIFT];
+                    new_tape.extend_from_slice(&tape);
+                    tape = new_tape;
+                    offset += SHIFT as isize;
+                }
             }
-            b'+' => tape[ptr] = tape[ptr].wrapping_add(1),
-            b'-' => tape[ptr] = tape[ptr].wrapping_sub(1),
+            b'+' => {
+                let i = (offset + ptr) as usize;
+                tape[i] = tape[i].wrapping_add(1);
+            }
+            b'-' => {
+                let i = (offset + ptr) as usize;
+                tape[i] = tape[i].wrapping_sub(1);
+            }
             b'.' => {
-                stdout.write_all(&[tape[ptr]]).unwrap();
+                let i = (offset + ptr) as usize;
+                stdout.write_all(&[tape[i]]).unwrap();
                 stdout.flush().unwrap();
             }
             b',' => {
-                tape[ptr] = match stdin.next() {
+                let i = (offset + ptr) as usize;
+                tape[i] = match stdin.next() {
                     Some(Ok(b)) => b,
                     _ => 0,
                 };
             }
             b'[' => {
-                if tape[ptr] == 0 {
+                if tape[(offset + ptr) as usize] == 0 {
                     pc = jump[pc];
                 }
             }
             b']' => {
-                if tape[ptr] != 0 {
+                if tape[(offset + ptr) as usize] != 0 {
                     pc = jump[pc];
                 }
             }
